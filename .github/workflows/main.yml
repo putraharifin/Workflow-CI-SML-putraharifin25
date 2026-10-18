@@ -27,6 +27,8 @@ permissions:
 env:
   IMAGE_NAME: predictive-maintenance-rf
   MLFLOW_TRACKING_URI: ./mlruns
+  DAGSHUB_USERNAME: putraharifin25
+  DAGSHUB_TOKEN: mock_token
 
 jobs:
   retrain-build-push:
