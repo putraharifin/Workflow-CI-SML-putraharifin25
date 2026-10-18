@@ -1,0 +1,21 @@
+name: predictive-maintenance-ci
+
+conda_env: conda.yaml
+
+entry_points:
+  main:
+    parameters:
+      data_path: {type: string, default: "ai4i2020_preprocessing.csv"}
+      n_estimators: {type: int, default: 200}
+      max_depth: {type: int, default: 20}
+      min_samples_split: {type: int, default: 2}
+      test_size: {type: float, default: 0.2}
+      random_state: {type: int, default: 42}
+    command: >-
+      python modelling.py
+      --data-path {data_path}
+      --n-estimators {n_estimators}
+      --max-depth {max_depth}
+      --min-samples-split {min_samples_split}
+      --test-size {test_size}
+      --random-state {random_state}

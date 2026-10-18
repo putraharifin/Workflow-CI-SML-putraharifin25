@@ -1,0 +1,96 @@
+name: Workflow-CI - Retrain, Build Docker, Push
+
+on:
+  workflow_dispatch:
+    inputs:
+      n_estimators:
+        description: "Jumlah pohon RandomForest"
+        required: false
+        default: "200"
+      max_depth:
+        description: "Kedalaman maksimum (<=0 = tanpa batas)"
+        required: false
+        default: "20"
+      min_samples_split:
+        description: "min_samples_split"
+        required: false
+        default: "2"
+  push:
+    branches: [main]
+    paths:
+      - "MLProject/**"
+      - ".github/workflows/main.yml"
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: predictive-maintenance-rf
+  MLFLOW_TRACKING_URI: ${{ github.workspace }}/mlruns
+
+jobs:
+  retrain-build-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Miniconda (Python 3.12.7)
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: "3.12.7"
+          channels: conda-forge
+          conda-remove-defaults: "true"
+          activate-environment: ci-runner
+
+      - name: Install MLflow
+        run: pip install mlflow==2.19.0
+
+      - name: Retrain via MLflow Project
+        run: |
+          mlflow run MLProject/ \
+            --env-manager=conda \
+            --experiment-name predictive-maintenance-ci \
+            -P n_estimators=${{ inputs.n_estimators || '200' }} \
+            -P max_depth=${{ inputs.max_depth || '20' }} \
+            -P min_samples_split=${{ inputs.min_samples_split || '2' }}
+
+      - name: Resolve run ID
+        run: |
+          RUN_ID=$(cat MLProject/run_id.txt)
+          echo "RUN_ID=${RUN_ID}" >> "$GITHUB_ENV"
+          echo "Run ID: ${RUN_ID}"
+
+      - name: Build Docker image (mlflow models build-docker)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          mlflow models build-docker \
+            --model-uri "runs:/${RUN_ID}/model" \
+            --name "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:latest"
+          docker tag "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:latest" "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_SHA::7}"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push Docker image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          docker push "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:latest"
+          docker push "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_SHA::7}"
+
+      - name: Upload MLflow runs
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-run-${{ github.run_number }}
+          path: |
+            mlruns
+            MLProject/run_id.txt
