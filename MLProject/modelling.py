@@ -25,11 +25,11 @@ TARGET_COL = "Machine failure"
 def load_dataset(path: Path) -> tuple[pd.DataFrame, pd.Series]:
     if not path.is_file():
         raise FileNotFoundError(
-            f"Dataset tidak ditemukan: {path}. Salin ai4i2020_preprocessing.csv dari repo Eksperimen_SML_siswa ke folder MLProject/."
+            f"Dataset tidak ditemukan: {path}. Salin ai4i2020_preprocessing.csv ke folder MLProject/."
         )
     df = pd.read_csv(path)
     
-    # Normalisasi nama kolom jika ada perbedaan spasi/underscore dari sistem preprocessing
+    # Normalisasi nama kolom jika ada perbedaan spasi/underscore
     df.columns = [col.replace('_', ' ') for col in df.columns]
     
     if TARGET_COL not in df.columns:
@@ -59,7 +59,6 @@ def main(argv: list[str] | None = None) -> int:
     
     X, y = load_dataset(args.data_path)
     
-    # Lakukan enkoding sederhana jika kolom 'Type' masih bertipe string/kategori hasil preprocessing
     if 'Type' in X.columns and X['Type'].dtype == 'object':
         X = pd.get_dummies(X, columns=['Type'], drop_first=True)
         
@@ -67,20 +66,19 @@ def main(argv: list[str] | None = None) -> int:
         X, y, test_size=args.test_size, stratify=y, random_state=args.random_state
     )
 
-    # Sinkronisasi Tracking URI lokal ke direktori kerja runner
+    # =========================================================================
+    # SOLUSI UTAMA: Hapus paksa warisan RUN_ID eksternal agar tidak bentrok di CI
+    # =========================================================================
+    if "MLFLOW_RUN_ID" in os.environ:
+        del os.environ["MLFLOW_RUN_ID"]
+
     mlflow.set_tracking_uri("./mlruns")
+    mlflow.set_experiment(args.experiment_name)
 
-    # Mencegah tabrakan instans Run ID eksternal bawaan MLflow Project
-    active_run = mlflow.active_run()
-    if active_run is None:
-        mlflow.set_experiment(args.experiment_name)
-        run_context = mlflow.start_run()
-    else:
-        run_context = mlflow.start_run(run_id=active_run.info.run_id)
-
-    mlflow.autolog()  # Aktif penuh melacak skikit-learn
+    mlflow.autolog()  # Aktif melacak metrik scikit-learn secara otomatis
     
-    with run_context as run:
+    # Memulai run baru secara bersih dan aman dari error nested/not found
+    with mlflow.start_run() as run:
         model = RandomForestClassifier(
             n_estimators=args.n_estimators,
             max_depth=args.max_depth if args.max_depth > 0 else None,
@@ -96,9 +94,9 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info("Test F1=%.4f Recall=%.4f ROC-AUC=%.4f", f1_score(y_test, pred),
                     recall_score(y_test, pred), roc_auc_score(y_test, proba))
 
-        # Menuliskan Run ID ke file teks agar bisa dibaca step build-docker
+        # Simpan Run ID asli ke berkas untuk dibaca oleh Docker builder
         args.run_id_file.write_text(run.info.run_id)
-        LOGGER.info("Run ID Berhasil Dicatat: %s", run.info.run_id)
+        LOGGER.info("Run ID Sukses Tercatat Secara Independen: %s", run.info.run_id)
         
     return 0
 
