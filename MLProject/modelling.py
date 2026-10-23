@@ -28,8 +28,12 @@ def load_dataset(path: Path) -> tuple[pd.DataFrame, pd.Series]:
             f"Dataset tidak ditemukan: {path}. Salin ai4i2020_preprocessing.csv dari repo Eksperimen_SML_siswa ke folder MLProject/."
         )
     df = pd.read_csv(path)
+    
+    # Normalisasi nama kolom jika ada perbedaan spasi/underscore dari sistem preprocessing
+    df.columns = [col.replace('_', ' ') for col in df.columns]
+    
     if TARGET_COL not in df.columns:
-        raise ValueError(f"Kolom target '{TARGET_COL}' tidak ada di {path}")
+        raise ValueError(f"Kolom target '{TARGET_COL}' tidak ada di {path}. Kolom yang tersedia: {list(df.columns)}")
     y = df[TARGET_COL].astype(int)
     if y.nunique() < 2:
         raise ValueError("Target hanya memiliki satu kelas; tidak bisa dilatih.")
@@ -52,17 +56,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = parse_args(argv)
+    
     X, y = load_dataset(args.data_path)
+    
+    # Lakukan enkoding sederhana jika kolom 'Type' masih bertipe string/kategori hasil preprocessing
+    if 'Type' in X.columns and X['Type'].dtype == 'object':
+        X = pd.get_dummies(X, columns=['Type'], drop_first=True)
+        
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=args.test_size, stratify=y, random_state=args.random_state
     )
 
-    # Di dalam `mlflow run`, experiment sudah ditentukan oleh MLflow Projects.
-    if not os.getenv("MLFLOW_RUN_ID"):
-        mlflow.set_experiment(args.experiment_name)
+    # Sinkronisasi Tracking URI lokal ke direktori kerja runner
+    mlflow.set_tracking_uri("./mlruns")
 
-    mlflow.autolog()  # aktif penuh sebelum .fit()
-    with mlflow.start_run() as run:
+    # Mencegah tabrakan instans Run ID eksternal bawaan MLflow Project
+    active_run = mlflow.active_run()
+    if active_run is None:
+        mlflow.set_experiment(args.experiment_name)
+        run_context = mlflow.start_run()
+    else:
+        run_context = mlflow.start_run(run_id=active_run.info.run_id)
+
+    mlflow.autolog()  # Aktif penuh melacak skikit-learn
+    
+    with run_context as run:
         model = RandomForestClassifier(
             n_estimators=args.n_estimators,
             max_depth=args.max_depth if args.max_depth > 0 else None,
@@ -78,8 +96,10 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info("Test F1=%.4f Recall=%.4f ROC-AUC=%.4f", f1_score(y_test, pred),
                     recall_score(y_test, pred), roc_auc_score(y_test, proba))
 
+        # Menuliskan Run ID ke file teks agar bisa dibaca step build-docker
         args.run_id_file.write_text(run.info.run_id)
-        LOGGER.info("Run ID: %s", run.info.run_id)
+        LOGGER.info("Run ID Berhasil Dicatat: %s", run.info.run_id)
+        
     return 0
 
 
