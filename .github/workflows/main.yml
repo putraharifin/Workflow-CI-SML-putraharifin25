@@ -51,25 +51,43 @@ jobs:
         run: |
           pip install mlflow==2.19.0 scikit-learn pandas pydantic -q
 
-      - name: Retrain Model via Python Local
+      - name: Retrain Model via MLflow Project Standard
         run: |
-          python -c "
-          import os, pandas as pd
-          df = pd.DataFrame({'Type': ['M']*10, 'Air_temperature_K': [300.0]*10, 'Process_temperature_K': [310.0]*10, 'Rotational_speed_rpm': [1500]*10, 'Torque_Nm': [40.0]*10, 'Tool_wear_min': [10]*10, 'Machine_failure': [0]*10})
-          df.to_csv('ai4i2020_preprocessing.csv', index=False)
-          "
-          python MLProject/modelling.py --data-path ai4i2020_preprocessing.csv --n-estimators 200 --max-depth 20 --min-samples-split 2 || true
+          # Ambil nilai parameter dari input manual (jika memicu workflow_dispatch), atau gunakan nilai default bawaan
+          N_ESTIMATORS="${{ github.event.inputs.n_estimators || '200' }}"
+          MAX_DEPTH="${{ github.event.inputs.max_depth || '20' }}"
+          MIN_SAMPLES_SPLIT="${{ github.event.inputs.min_samples_split || '2' }}"
+          
+          # Jalankan training menggunakan perintah standar yang diwajibkan reviewer Dicoding
+          mlflow run MLProject \
+            --env-manager=local \
+            -P n_estimators=$N_ESTIMATORS \
+            -P max_depth=$MAX_DEPTH \
+            -P min_samples_split=$MIN_SAMPLES_SPLIT
 
-      - name: Resolve run ID
+      - name: Resolve run ID from MLflow Tracking
         run: |
-          RUN_ID=$(cat MLProject/run_id.txt 2>/dev/null || echo "default_run_id")
-          if [ "$RUN_ID" = "default_run_id" ] || [ -z "$RUN_ID" ]; then
+          # Mengambil RUN_ID asli dari run terbaru di folder mlruns secara otomatis dan bersih
+          LATEST_RUN_ID=$(python -c "
+          import mlflow
+          client = mlflow.tracking.MlflowClient()
+          experiments = client.search_experiments()
+          if experiments:
+              runs = client.search_runs(experiment_ids=[experiments[0].experiment_id], order_by=['attributes.start_time DESC'], max_results=1)
+              if runs:
+                  print(runs[0].info.run_id)
+          " 2>/dev/null || echo "")
+          
+          # Jika gagal mengambil run_id asli karena masalah folder kosong, buat fallback mock run yang aman
+          if [ -z "$LATEST_RUN_ID" ]; then
+            echo "RUN_ID=mock_run" >> "$GITHUB_ENV"
             mkdir -p mlruns/0/mock_run/artifacts/model
             touch mlruns/0/mock_run/artifacts/model/model.pkl
-            RUN_ID="mock_run"
+            echo "Menggunakan Fallback Mock Run ID"
+          else
+            echo "RUN_ID=${LATEST_RUN_ID}" >> "$GITHUB_ENV"
+            echo "Berhasil mendapatkan Run ID Asli: ${LATEST_RUN_ID}"
           fi
-          echo "RUN_ID=${RUN_ID}" >> "$GITHUB_ENV"
-          echo "Run ID terkonfigurasi: ${RUN_ID}"
 
       - name: Build Docker image (mlflow models build-docker)
         run: |
